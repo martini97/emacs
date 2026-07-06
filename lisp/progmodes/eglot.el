@@ -4826,6 +4826,13 @@ are not added.  Set to nil for unlimited watches.")
              eglot--servers-by-project)
     count))
 
+(defun eglot--error-max-file-watches ()
+  "Warn and signal a `jsonrpc-error' that `eglot-max-file-watches' has been reached."
+  (eglot--warn "Reached `eglot-max-file-watches' limit of %d, \
+not watching some directories" eglot-max-file-watches)
+  (jsonrpc-error "Reached `eglot-max-file-watches' limit of %d"
+                 eglot-max-file-watches))
+
 (cl-defun eglot--watch-globs (server id globs dir in-root
                                      &aux (project (eglot--project server))
                                      success
@@ -4875,11 +4882,8 @@ happens to be inside or matching the project root."
          (cond ((not (file-readable-p subdir)))
                ((and eglot-max-file-watches
                      (>= watch-count eglot-max-file-watches))
-                (eglot--warn "Reached `eglot-max-file-watches' limit of %d, \
-not watching some directories" eglot-max-file-watches)
                 ;; Could `(setq success t)' here to keep partial watches.
-                (jsonrpc-error "Reached `eglot-max-file-watches' limit of %d"
-                               eglot-max-file-watches))
+                (eglot--error-max-file-watches))
                (t
                 (push (file-notify-add-watch subdir '(change) #'handle-event)
                       (gethash id (eglot--file-watches server)))
@@ -4925,11 +4929,15 @@ not watching some directories" eglot-max-file-watches)
                        (or kind 7))
                  (gethash (cons base-path in-root) groups)))))
      watchers)
-    ;; For each group, set up watches
-    (maphash
-     (lambda (base-path globs)
-       (eglot--watch-globs server id globs (car base-path) (cdr base-path)))
-     groups)))
+    (if (or (null eglot-max-file-watches)
+            (zerop (hash-table-count groups))
+            (< (eglot--count-file-watches) eglot-max-file-watches))
+        ;; For each group, set up watches
+        (maphash
+         (lambda (base-path globs)
+           (eglot--watch-globs server id globs (car base-path) (cdr base-path)))
+         groups)
+      (eglot--error-max-file-watches))))
 
 (cl-defmethod eglot-unregister-capability
   (server (_method (eql workspace/didChangeWatchedFiles)) id)
